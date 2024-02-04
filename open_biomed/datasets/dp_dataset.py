@@ -33,7 +33,7 @@ def _load_bbbp_dataset(input_path):
                                 for m in preprocessed_rdkit_mol_objs_list]
     labels = input_df['p_np']
     # convert 0 to -1
-    # labels = labels.replace(0, -1)
+    labels = labels.replace(0, -1)
     # there are no nans
     assert len(smiles_list) == len(preprocessed_rdkit_mol_objs_list)
     assert len(smiles_list) == len(preprocessed_smiles_list)
@@ -54,7 +54,7 @@ def _load_clintox_dataset(input_path):
     tasks = ['FDA_APPROVED', 'CT_TOX']
     labels = input_df[tasks]
     # convert 0 to -1
-    # labels = labels.replace(0, -1)
+    labels = labels.replace(0, -1)
     # there are no nans
     assert len(smiles_list) == len(preprocessed_rdkit_mol_objs_list)
     assert len(smiles_list) == len(preprocessed_smiles_list)
@@ -134,7 +134,7 @@ def _load_muv_dataset(input_path):
              'MUV-832', 'MUV-846', 'MUV-852', 'MUV-858', 'MUV-859']
     labels = input_df[tasks]
     # convert 0 to -1
-    # labels = labels.replace(0, -1)
+    labels = labels.replace(0, -1)
     # convert nan to 0
     labels = labels.fillna(0)
     assert len(smiles_list) == len(rdkit_mol_objs_list)
@@ -247,7 +247,7 @@ def _load_sider_dataset(input_path):
              'Injury, poisoning and procedural complications']
     labels = input_df[tasks]
     # convert 0 to -1
-    # labels = labels.replace(0, -1)
+    labels = labels.replace(0, -1)
     assert len(smiles_list) == len(rdkit_mol_objs_list)
     assert len(smiles_list) == len(labels)
     return smiles_list, rdkit_mol_objs_list, labels.values
@@ -268,7 +268,7 @@ def _load_toxcast_dataset(input_path):
     tasks = list(input_df.columns)[1:]
     labels = input_df[tasks]
     # convert 0 to -1
-    # labels = labels.replace(0, -1)
+    labels = labels.replace(0, -1)
     # convert nan to 0
     labels = labels.fillna(0)
     assert len(smiles_list) == len(preprocessed_rdkit_mol_objs_list)
@@ -320,7 +320,7 @@ def _load_tox21_dataset(input_path):
              'NR-PPAR-gamma', 'SR-ARE', 'SR-ATAD5', 'SR-HSE', 'SR-MMP', 'SR-p53']
     labels = input_df[tasks]
     # convert 0 to -1
-    # labels = labels.replace(0, -1)
+    labels = labels.replace(0, -1)
     # convert nan to 0
     labels = labels.fillna(0)
     assert len(smiles_list) == len(rdkit_mol_objs_list)
@@ -334,7 +334,7 @@ def _load_hiv_dataset(input_path):
     rdkit_mol_objs_list = [AllChem.MolFromSmiles(s) for s in smiles_list]
     labels = input_df['HIV_active']
     # convert 0 to -1
-    # labels = labels.replace(0, -1)
+    labels = labels.replace(0, -1)
     # there are no nans
     assert len(smiles_list) == len(rdkit_mol_objs_list)
     assert len(smiles_list) == len(labels)
@@ -346,7 +346,7 @@ def _load_bace_dataset(input_path):
     rdkit_mol_objs_list = [AllChem.MolFromSmiles(s) for s in smiles_list]
     labels = input_df['Class']
     # convert 0 to -1
-    # labels = labels.replace(0, -1)
+    labels = labels.replace(0, -1)
     # there are no nans
     folds = input_df['Model']
     folds = folds.replace('Train', 0)  # 0 -> train
@@ -382,31 +382,37 @@ class DPDataset(Dataset, ABC):
         self.path = path
         self.config = config
         self.in_memory = in_memory
-        self._load_data()
+        # self._load_data()
         # self._featurize()
 
     @abstractmethod
     def _load_data(self, path):
         raise NotImplementedError
 
-    def _featurize(self):
+    def _featurize(self, save=True):
         logger.info("Featurizing...")
         # self.featurized_drugs: 如果是多模态就是一个dict, 如果是structure单模态就是list[Data()]
-        self.drugs = [self.drug_featurizer(drug) for drug in self.drugs]
+        self.featurized_drugs = [self.drug_featurizer(drug) for drug in self.drugs] # 原来是这样
+        # self.drugs = [self.drug_featurizer(drug) for drug in self.drugs]
         self.labels = [torch.tensor(label) for label in self.labels]
+        if save:
+            # TODO: 把该存的存起来
+            torch.save(
+                (self.featurized_drugs, self.labels, self.drugs, self.train_index, self.val_index, self.test_index),
+                self.processed_file_path)
 
     def _build(self, save_path=""):
         if len(self.config["mol"]["modality"]) > 1 and save_path:
             kg_config = self.config["mol"]["featurizer"]["kg"]
             self.kg = SUPPORTED_KG[kg_config["kg_name"]](kg_config["kg_path"])
-            self.drug2kg, self.drug2text, _, _ = self.kg.link(self)
+            self.mol2kg, self.mol2text, _, _ = self.kg.link(self)
             # TODO: dp use TransE, don't need filter_out?
             filter_out = []
             """
             for i_drug in data_index:
                 smi = self.smiles[i_drug]
-                #if smi in self.drug2kg:
-                #    filter_out.append((self.drug2kg[smi], self.protein2kg[protein]))
+                #if smi in self.mol2kg:
+                #    filter_out.append((self.mol2kg[smi], self.protein2kg[protein]))
             """
             # embed once for consistency
             try:
@@ -422,8 +428,8 @@ class DPDataset(Dataset, ABC):
     def _configure_featurizer(self):
         if len(self.config["mol"]["modality"]) > 1:
             self.drug_featurizer = MolMultiModalFeaturizer(self.config["mol"])
-            self.drug_featurizer.set_drug2kgid_dict(self.drug2kg)
-            self.drug_featurizer.set_drug2text_dict(self.drug2text)
+            # self.drug_featurizer.set_mol2kgid_dict(self.mol2kg)
+            self.drug_featurizer.set_mol2text_dict(self.smi2text) # TODO: self.mol2text来自于load_data
         else:
             drug_feat_config = self.config["mol"]["featurizer"]["structure"]
             self.drug_featurizer = SUPPORTED_MOL_FEATURIZER[drug_feat_config["name"]](drug_feat_config)
@@ -432,6 +438,7 @@ class DPDataset(Dataset, ABC):
         new_dataset = copy.copy(self)
         new_dataset.drugs = [new_dataset.drugs[i] for i in indexes]
         new_dataset.labels = [new_dataset.labels[i] for i in indexes]
+        new_dataset.featurized_drugs = [new_dataset.featurized_drugs[i] for i in indexes]
         return new_dataset
 
     def __getitem__(self, index):
@@ -494,12 +501,24 @@ class MoleculeNetDataset(DPDataset):
         "qm9":      Task.REGRESSION
     }
 
-    def __init__(self, path, config, name="BBBP", label_type=1):
+
+    name2text = {
+      "bbbp": "Binary labels of blood-brain barrier penetration(permeability)",
+      "clintox": "Qualitative data of drugs that failed clinical trials for toxicity reasons",
+      "tox21": "Qualitative toxicity measurements including nuclear receptors and stress response pathways",
+      "toxcast": "Compounds based on in vitro high-throughput screening",
+      "sider": "marketed drugs and adverse drug reactions (ADR), grouped into 27 system organ classes",
+      "hiv": "Experimentally measured abilities to inhibit HIV replication",
+      "bace": "Quantitative (IC50) and qualitative (binary label) binding results for human β-secretase 1(BACE-1)",
+      "muv": "Subset of PubChem BioAssay designed for validation of virtual screening techniques",
+    }
+
+    def __init__(self, fold_path, config, name="BBBP", label_type=1):
         if name not in self.name2target:
             raise ValueError("%s is not a valid moleculenet task!" % name)
-        file_name = os.listdir(os.path.join(path, name.lower(), "raw"))[0]
+        file_name = os.listdir(os.path.join(fold_path, name.lower(), "raw"))[0]
         assert file_name[-4:] == ".csv"
-        path = os.path.join(path, name.lower(), "raw", file_name)
+        path = os.path.join(fold_path, name.lower(), "raw", file_name)
         self.name = name
         self.targets = self.name2target[name]
         # TODO: del: no use
@@ -507,15 +526,27 @@ class MoleculeNetDataset(DPDataset):
         # TODO: del label_type
         self.label_type = label_type
         super(MoleculeNetDataset, self).__init__(path, config)
-        self._train_test_split()
-        self._normalize()
+        self.processed_file_path = self.get_processed_file_path(fold_path, name.lower(), config)
+        if os.path.exists(self.processed_file_path):
+            self.featurized_drugs, self.labels, self.drugs, self.train_index, self.val_index, self.test_index = torch.load(
+                self.processed_file_path)
+        else:
+            self._load_data()
+            self._train_test_split()
+            self._normalize()
+            save_path = ""
+            if len(config["mol"]["modality"]) > 1 and "kg" in config["mol"]["featurizer"]:
+                save_path = os.path.join(
+                    config["mol"]["featurizer"]["kg"]["save_path"], "dp-" + name + "_val.pkl")
+            self._build(save_path)
         
     
     def _load_data(self):
         smiles_list, rdkit_mol_objs, labels = datasetname2function[self.name.lower()](self.path)
         if labels.ndim == 1:
             labels = np.expand_dims(labels, axis=1)
-        self.smiles, self.drugs, self.labels = [], [], []
+        # TODO: 
+        self.smiles, self.drugs, self.labels, self.prompts, self.texts = [], [], [], [], []
         for i in range(len(smiles_list)):
             rdkit_mol = rdkit_mol_objs[i]
             if rdkit_mol is None:
@@ -525,6 +556,11 @@ class MoleculeNetDataset(DPDataset):
             self.drugs.append(smiles_list[i])
             # self.drugs.append(rdkit_mol[i])
             self.labels.append(labels[i])
+            # TODO: 这里文本记得换掉
+            self.texts.append(self.name2text[self.name.lower()])
+            #self.prompts.append("chemical properties and functions")
+
+        self.smi2text = dict(zip(self.smiles, self.texts))
     
     def _train_test_split(self, strategy="scaffold"):
         if strategy == "random":
@@ -541,6 +577,30 @@ class MoleculeNetDataset(DPDataset):
         else:
             # TODO:
             self.normalizer = [None] * len(self.targets)
+
+
+    def get_processed_file_path(self, fold_path, name, config):
+        """
+        get the .pt file path based on modality
+        Args:
+            fold_path (str): flod path of MoleculeNet
+
+            config (dict): the config of task which used to get the modality
+        """
+        modality = config["mol"]["modality"]
+        assert "structure" in modality
+        if len(modality) == 2 and "kg" in modality:
+            return os.path.join(fold_path, name.lower(), "processed", "data_processed_kg.pt")
+        elif len(modality) == 2 and "text" in modality:
+            return os.path.join(fold_path, name.lower(), "processed", "data_processed_text.pt")
+        elif len(modality) == 3 and config["mol"]["featurizer"]["kg"]["kg_name"] == "BMKG":
+            return os.path.join(fold_path, name.lower(), "processed", "data_processed_bmkgv1.pt")
+        elif len(modality) == 3:
+            return os.path.join(fold_path, name.lower(), "processed", "data_processed_text_kg.pt")
+        elif len(modality) == 1 and config["mol"]["featurizer"]["structure"]["name"] in ["transformer"]:
+            return os.path.join(fold_path, name.lower(), "processed", "data_processed_kvplm.pt")
+        else:
+            return os.path.join(fold_path, name.lower(), "processed", "data_processed.pt")
 
 SUPPORTED_DP_DATASETS = {
     "MoleculeNet": MoleculeNetDataset

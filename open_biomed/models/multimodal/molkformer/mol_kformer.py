@@ -13,8 +13,35 @@ from open_biomed.models.molecule.gnn_graphmvp import GNNGraphMVP
 from open_biomed.models.multimodal.molkformer.kformer import BertConfig, BertLMHeadModel
 from open_biomed.utils.mol_utils import convert_pyg_batch, get_biot5_tokenizer
 
+from torch_geometric.nn import (MessagePassing, global_add_pool, global_max_pool, global_mean_pool)
+
+activation = {
+    "sigmoid": nn.Sigmoid(),
+    "softplus": nn.Softplus(),
+    "relu": nn.ReLU(),
+    "gelu": nn.GELU(),
+    "tanh": nn.Tanh(),
+}
+
+class MLP(nn.Module):
+    def __init__(self, config, input_dim, output_dim=1):
+        super(MLP, self).__init__()
+        self.model = nn.Sequential()
+        hidden_dims = [input_dim] + config["hidden_size"] + [output_dim]
+        for i in range(len(hidden_dims) - 1):
+            self.model.append(nn.Linear(hidden_dims[i], hidden_dims[i + 1]))
+            if i != len(hidden_dims) - 2:
+                self.model.append(nn.Dropout(config["dropout"]))
+                if config["activation"] != "none":
+                    self.model.append(activation[config["activation"]])
+                if config["batch_norm"]:
+                    self.model.append(nn.BatchNorm1d())
+    
+    def forward(self, h):
+        return self.model(h)
+
 class MolKFormer(MolEncoder, TextEncoder):
-    def __init__(self, config):
+    def __init__(self, config, task_num=None):
         super().__init__()
         self.structure_config = config["structure"]
         self.kformer_config = BertConfig.from_json_file(config["kformer_config_file"])
@@ -53,13 +80,17 @@ class MolKFormer(MolEncoder, TextEncoder):
         decoder_config = T5Config.from_json_file(config["decoder"]["config_file"])
         self.text_decoder = T5ForConditionalGeneration(decoder_config)
         state_dict = torch.load("./ckpts/fusion_ckpts/biot5/pytorch_model.bin", map_location="cpu")
-        self.text_decoder.load_state_dict(state_dict, strict=True)
         self.text_decoder.resize_token_embeddings(35073)
+        self.text_decoder.load_state_dict(state_dict, strict=True)
         self.enc2dec = nn.Linear(self.kformer_config.hidden_size, self.text_decoder.config.hidden_size)
         
         #self.h_proj = nn.Linear(self.kformer_config.hidden_size, self.projection_dim)
         #self.t_proj = nn.Linear(self.kformer_config.hidden_size, self.projection_dim)
+        self.mol_embeds_proj = nn.Linear(self.kformer_config.hidden_size, self.structure_config["gin_hidden_dim"])
         self.norm = True
+
+        # TODO: 消融实验和不同数据的out_dim都要在这改
+        self.pred_head = MLP(config["pred_head"], self.structure_config["gin_hidden_dim"]*2, task_num)
 
     def forward(self, mol, text=None, prompt=None, cal_loss=False):
         # calculate molecule feature
@@ -191,7 +222,7 @@ class MolKFormer(MolEncoder, TextEncoder):
         return graph_embeds, node_feats, node_attention_mask
 
     def encode_mol(self, mol, proj=False):
-        if "text" in mol:
+        if "text" in mol: # TODO: 这里有text，但并没有使用
             s = mol["structure"]
             if "graph" in mol["structure"]:
                 s = s["graph"]
@@ -315,3 +346,18 @@ class MolKFormer(MolEncoder, TextEncoder):
             return_dict=True,
             labels=labels
         ).loss
+    
+
+    def get_dp_output(self, mol):
+        mol_embeds = self.encode_mol(mol)  
+        # 这里要进行池化
+        mol_embeds = torch.mean(mol_embeds, dim=1, keepdim=False)
+        mol_embeds = self.mol_embeds_proj(mol_embeds)
+        # 然后要resize 
+        # mol_embeds = torch.nn.MaxPool1d(kernel_size)
+        #mol_embeds = torch.nn.functional.adaptive_avg_pool1d(mol_embeds.transpose(1, 2), output_size=1)
+        # mol_embeds = mol_embeds.transpose(1, 2).squeeze()
+        graph_embeds, _ = self.structure_encoder(mol["structure"]["graph"])
+        # 768到300
+        h = torch.cat((mol_embeds, graph_embeds), dim=1)
+        return self.pred_head(h)

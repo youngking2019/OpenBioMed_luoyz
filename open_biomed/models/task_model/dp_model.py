@@ -19,7 +19,7 @@ class MLP(nn.Module):
     def __init__(self, config, input_dim, output_dim):
         super(MLP, self).__init__()
         self.model = nn.Sequential()
-        hidden_dims = [input_dim] + config["hidden_size"] + [output_dim]
+        hidden_dims = [input_dim] + [256] + [output_dim]
         for i in range(len(hidden_dims) - 1):
             self.model.append(nn.Linear(hidden_dims[i], hidden_dims[i + 1]))
             if i != len(hidden_dims) - 2:
@@ -107,23 +107,23 @@ class DeepEIK4DP(nn.Module):
                                               vdim=self.text_encoder.hidden_dim
                                               )
         # structure + kg + text
-        self.pred_head = MLP(config["pred_head"], self.structure_hidden_dim + 2 * self.projection_dim, out_dim)
+        self.pred_head = MLP(config["pred_head"], self.structure_hidden_dim, out_dim)
         
     def forward(self, drug):
         self.h_drug_structure = self.drug_structure_encoder(drug["structure"])
-        h_kg = drug["kg"]
-        
+        #h_kg = drug["kg"]
+        """
         if self.text_encoder is not None:
             h_text = self.text_encoder(**drug["text"]).last_hidden_state[:, 0, :]
         else:
             h_text = drug["text"]
-        
+        """
         # TODO: 
         if self.use_attention:
             _, attn = self.attn(torch.cat(self.h_drug_structure, h_kg).unsqueeze(1), h_text, h_text)
             h_text = torch.matmul(attn * drug["text"].unsqueeze(1), h_text)
             
-        h_text = self.text_project(h_text)
-        h = torch.cat((self.h_drug_structure, h_kg, h_text), dim=1)
+        #h_text = self.text_project(h_text)
+        #h = torch.cat((self.h_drug_structure, h_text), dim=1)
         
-        return self.pred_head(h)
+        return self.pred_head(self.h_drug_structure[0])
